@@ -2670,7 +2670,7 @@ function setDefaultCfgValues {
 		if [ -z "$USEVORTEXPRERELEASE" ]				; then	USEVORTEXPRERELEASE="0"; fi
 		if [ -z "$DISABLE_AUTOSTAGES" ]					; then	DISABLE_AUTOSTAGES="0"; fi
 		if [ -z "$CHEATENGINEVERSION" ]					; then	CHEATENGINEVERSION="7.5"; fi
-		if [ -z "$CHEATENGINEMD5SUM" ]					; then	CHEATENGINEMD5SUM="880b14c243f8f554356a34fe4f0b756f"; fi
+		if [ -z "$CHEATENGINEMD5SUM" ]					; then	CHEATENGINEMD5SUM="70849e456675aa2de8208761a8acbfcc"; fi
 		if [ -z "$NOSTEAMSTLDEF" ]						; then	NOSTEAMSTLDEF="0"; fi
 		if [ -z "$SGDBAPIKEY" ]							; then	SGDBAPIKEY="$NON"; fi
 		if [ -z "$SGDBSTYLES" ]							; then	SGDBSTYLES="$SGDBSTYOPTS"; fi
