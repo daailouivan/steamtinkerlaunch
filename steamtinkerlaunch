@@ -6,13 +6,13 @@
 PREFIX="/usr"
 PROGNAME="SteamTinkerLaunch"
 NICEPROGNAME="Steam Tinker Launch"
-PROGVERS="v14.0.20240105-2-cegc"
+PROGVERS="v14.0.20240131-1-cegc"
 PROGCMD="${0##*/}"
 PROGINTERNALPROTNAME="Proton-stl"
 SHOSTL="stl"
 GHURL="https://github.com"
 AGHURL="https://api.github.com"
-PROJECTPAGE="$GHURL/sonic2kk/${PROGNAME,,}"
+PROJECTPAGE="$GHURL/daailouivan/${PROGNAME,,}"
 PPW="$PROJECTPAGE/wiki"
 CURWIKI="$PPW"
 STARTDEBUG=1
@@ -331,6 +331,7 @@ SOMEWINEDEBUGOPTIONS="-all,+steam,+vrclient,+vulkan"
 DEFSGDBHERODIMS="3840x1240,1920x620"
 DEFSGDBBOXARTDIMS="600x900"
 DEFSGDBTENFOOTDIMS="920x430,460x215"
+SGDBHASFILEOPTS="skip!backup!replace"
 SGDBTYPEOPTS="static!animated!static,animated!animated,static"
 SGDBTAGOPTS="any!true!false"
 SGDBHEROSTYLEOPTS="alternate,blurred,material"
@@ -585,6 +586,7 @@ HEADLINEFONT="larger"
 FONTSIZES="!xx-small!x-small!small!smaller!medium!large!larger!!x-large!xx-large!"
 SREG="system.reg"
 NSGA="non-steam game"
+FSGDBA="FetchSteamGridDBArtwork"
 SGA="set game artwork"
 BTVP="$DRC/Program Files/Black Tree Gaming Ltd/${VTX^}"
 VTXRAA="resources/app.asar"
@@ -1537,6 +1539,81 @@ function getSteamGridDBArtwork {
 
 		commandlineGetSteamGridDBArtwork --search-id="$SGDBSEARCHAID" --steam
 	done <<< "${1}"
+}
+
+# GUI frontend for below 'commandlineGetSteamGridDBArtwork'
+function getSteamGridDBArtworkGUI {
+	FSGDBAWFILENAMEAPPID="$1"
+	AID="$FSGDBAWFILENAMEAPPID"  # AID needed for setShowPic
+
+	FSGDBAW_HEADERTITLE="$( getTitleFromID "$AID" "1" ) ($AID)"  # Display title and AppID for clarity in case showPic is not present/unclear
+
+	writelog "INFO" "${FUNCNAME[0]} - Starting the Gui for SteamGridDB Artwork selection for '$AID'"
+
+	export CURWIKI="$PPW/SteamGridDB"
+	TITLE="${PROGNAME}-$FSGDBA"
+	pollWinRes "$TITLE"
+	setShowPic
+
+	# AppID passed from commandline is used as --filename-appid
+	# User can provide Steam AppID, SteamGridDB Game ID, or Game Name (used to attempt to fetch SteamGridDB Game ID)
+	# - Steam AppID is prioritised if provided
+	# - commandlineGetSteamGridDBArtwork is set to fall back to SteamGridDB Game ID if Game Name doesn't return anything, so passing both is fine
+	# SGDBHASFILE will use the global option by default and populate the dropdown with the relevant option, just like the command does
+	# It will use the Global Menu default, but also allows the user to specify a different action this time
+	#
+	# FSGDBAW = Fetcch SteamGridDB ArtWork :-)
+	FSGDBAWGUISET="$("$YAD" --f1-action="$F1ACTION" --window-icon="$STLICON" --form --scroll --center --on-top "$WINDECO" \
+	--title="$TITLE" --separator="|" --image="$SHOWPIC" \
+	--text="$(spanFont "$(strFix "$GUI_FSGDBAW" "$FSGDBAW_HEADERTITLE")" "H")\n${DESC_FSGDBAW}" \
+	--field=" ":LBL " " \
+	--field="$GUI_FSGDBAWAPPID!$DESC_FSGDBAWAPPID ('FSGDBAWAPPID')" "${FSGDBAWAPPID/#-/ -}" \
+	--field="$GUI_FSGDBAWGAMEID!$DESC_FSGDBAWGAMEID ('FSGDBAWGAMEID')" "${FSGDBAWGAMEID/#-/ -}" \
+	--field="$GUI_FSGDBAWSEARCHNAME!$DESC_FSGDBAWSEARCHNAME ('FSGDBAWSEARCHNAME')" "${FSGDBAWSEARCHNAME/#-/ -}" \
+	--field="$GUI_SGDBHASFILE!$DESC_SGDBHASFILE ('FSGDBAWHASFILE')":CB "$(cleanDropDown "${SGDBHASFILE/#-/ -}" "${SGDBHASFILEOPTS}")" \
+	--field="$GUI_FSGDBAWAPPLYARTWORK!$DESC_FSGDBAWAPPLYARTWORK ('FSGDBAWAPPLYARTWORK')":CHK "1" \
+	--button="$BUT_CAN":0 --button="$BUT_DONE":2 "$GEOM")"
+
+	case $? in
+		0) writelog "INFO" "${FUNCNAME[0]} - Selected '$BUT_CAN'" ;;
+		2)
+			{
+				writelog "INFO" "${FUNCNAME[0]} - Selected '$BUT_DONE'"
+				mapfile -d "|" -t -O "${#FSGDBAWARR[@]}" FSGDBAWARR < <(printf '%s' "$FSGDBAWGUISET")
+
+				FSGDBAWAPPID="${FSGDBAWARR[1]}"
+				FSGDBAWGAMEID="${FSGDBAWARR[2]}"
+				FSGDBAWSEARCHNAME="${FSGDBAWARR[3]}"
+				FSGDBAWHASFILE="--${FSGDBAWARR[4]}-existing"  # i.e. turns 'replace' into '--replace-existing'
+				FSGDBAWAPPLYARTWORK="$( retBool "${FSGDBAWARR[5]}" )"
+
+				if [ -z "${FSGDBAWAPPID}" ] && [ -z "${FSGDBAWGAMEID}" ] && [ -z "${FSGDBAWSEARCHNAME}" ]; then
+					writelog "ERROR" "${FUNCNAME[0]} - You must pass at least a Steam AppID, SteamGridDB Game ID, or SteamGridDB Game Name"
+					echo "You must pass at least a Steam AppID, SteamGridDB Game ID, or SteamGridDB Game Name"
+					notiShow "$NOTY_FSGDBAWINVALID"
+					return
+				fi
+
+				notiShow "$( strFix "$NOTY_FSGDBAW" "$FSGDBAW_HEADERTITLE" )"
+
+				FSGDBAWGAMETYPEFLAG="--nonsteam"  # Default to non-steam, since Game ID and Game Name will use SGDB /game/ endpoint
+				if [ -n "$FSGDBAWAPPID" ]; then
+					FSGDBAWGAMETYPEFLAG="--steam"  # Only use SGDB Steam game endpoint if we pass a Steam AppID to search for artwork on
+					FSGDBAWSEARCHID="${FSGDBAWAPPID}"
+				else
+					FSGDBAWSEARCHID="${FSGDBAWGAMEID}"
+				fi
+
+				FSGDBAWAPPLYARTWORKFLAG="--apply"  # Checkbox is defaulted to 1 (enabled), so default flag to '--apply'
+				if [ "$FSGDBAWAPPLYARTWORK" -eq 0 ]; then
+					FSGDBAWAPPLYARTWORKFLAG="--no-apply"
+				fi
+
+				# Execute actual fetching of artwork, could probably put notifier here
+				writelog "INFO" "${FUNCNAME[0]} - Executing 'commandlineGetSteamGridDBArtwork --search-id=\"${FSGDBAWGAMEID}\" --search-name=\"${FSGDBAWSEARCHNAME}\" --filename-appid=\"${FSGDBAWFILENAMEAPPID}\" \"${FSGDBAWHASFILE}\" \"${FSGDBAWGAMETYPEFLAG}\"'"
+				commandlineGetSteamGridDBArtwork --search-id="${FSGDBAWSEARCHID}" --search-name="${FSGDBAWSEARCHNAME}" --filename-appid="${FSGDBAWFILENAMEAPPID}" "${FSGDBAWHASFILE}" "${FSGDBAWAPPLYARTWORKFLAG}" "${FSGDBAWGAMETYPEFLAG}"
+			}
+	esac
 }
 
 # Used to get either Steam or Non-Steam artwork depending on a flag -- Used internally and for commandline usage
@@ -4519,7 +4596,7 @@ function setGameArtGui {
 
 	SGAGAMENAME="Unknown Game"
 	if [ -n "$1" ]; then
-		SGAGAMENAME="$( getTitleFromID "$1" )"
+		SGAGAMENAME="$( getTitleFromID "$1" "1" )"
 		if [ -z "$AID" ] || [ "$AID" -eq "$PLACEHOLDERAID" ]; then
 			AID="$1"
 		fi
@@ -5559,7 +5636,7 @@ function AllSettingsEntriesDummyFunction {
 --field="$(spanFont "$GUI_OPTSGRID" "H")":LBL "SKIP" `#CAT_SteamGridDB` `#HEAD_SteamGridDB` `#MENU_GLOBAL` \
 --field="     $GUI_SGDBDLTOSTEAM!$DESC_SGDBDLTOSTEAM ('SGDBDLTOSTEAM')":CHK "${SGDBDLTOSTEAM/#-/ -}" `#CAT_SteamGridDB` `#SUB_Checkbox` `#MENU_GLOBAL` \
 --field="     $GUI_SGDBAPIKEY!$DESC_SGDBAPIKEY ('SGDBAPIKEY')":CBE "${SGDBAPIKEY/#-/ -}" `#CAT_SteamGridDB` `#MENU_GLOBAL` \
---field="     $GUI_SGDBHASFILE!$DESC_SGDBHASFILE ('SGDBHASFILE')":CB "$(cleanDropDown "${SGDBHASFILE/#-/ -}" "skip!backup!replace")" `#CAT_SteamGridDB` `#MENU_GLOBAL` \
+--field="     $GUI_SGDBHASFILE!$DESC_SGDBHASFILE ('SGDBHASFILE')":CB "$(cleanDropDown "${SGDBHASFILE/#-/ -}" "${SGDBHASFILEOPTS}")" `#CAT_SteamGridDB` `#MENU_GLOBAL` \
 --field="     $GUI_SGDBAUTODL!$DESC_SGDBAUTODL ('SGDBAUTODL')":CB "$(cleanDropDown  "${SGDBAUTODL/#-/ -}" "$NON!after_game!before_game!no_meta")" `#CAT_SteamGridDB` `#MENU_GLOBAL` \
 --field="     $GUI_SGDBDLHERO!$DESC_SGDBDLHERO ('SGDBDLHERO')":CHK "${SGDBDLHERO/#-/ -}" `#CAT_SteamGridDB` `#MENU_GLOBAL` \
 --field="     $GUI_SGDBDIMS!$DESC_SGDBDIMS ('SGDBHERODIMS')":CBE "$(cleanDropDown "${SGDBHERODIMS/#-/ -}" "${DEFSGDBHERODIMS//,/\!}")" `#CAT_SteamGridDB` `#MENU_GLOBAL` \
@@ -6250,7 +6327,7 @@ function fixShowGnAid {
     fi
 
 	# Will use "real" game name if it exists, e.g. "NieR:Automata" instead of NieRAutomata
-	PRETTYGAMENAME="$( getTitleFromID "$AID" )"
+	PRETTYGAMENAME="$( getTitleFromID "$AID" "1" )"
 	if [ -n "$PRETTYGAMENAME" ]; then
 		SGNAID="$PRETTYGAMENAME ($AID)"
 		SGNAID="${SGNAID//&/+}"
@@ -6912,6 +6989,14 @@ function migrateCfgOption {
 			touch "$FUPDATE"
 			writelog "INFO" "${FUNCNAME[0]} - Automatically updating variable SPEKVERS from 'old' to '$SPEKVERS' in '$STLGAMECFG'"
 			updateConfigEntry "SPEKVERS" "$SPEKVERS" "$STLGAMECFG"
+		fi
+
+		# stop MO2MODE from being 'none' in weird scenarios -- Issue was confirmed to be exclusive to SteamOS and may be a (temporary?) SteamOS regression
+		if [ "$MO2MODE" == "$NON" ]; then
+			MO2MODE="disabled"
+			touch "$FUPDATE"
+			writelog "INFO" "${FUNCNAME[0]} - ModOrganizer 2 variable MO2MODE is somehow '$NON' -- Defaulting this to 'disabled'"
+			updateConfigEntry "MO2MODE" "$MO2MODE" "$STLGAMECFG"
 		fi
 
 		# collections update
@@ -7753,77 +7838,93 @@ function listSteamGames {
 function getIDFromTitle {
 	SEARCHSTEAMSHORTCUTS="${2:-0}"  # Default to not searching Steam shortcuts
 	if [ -z "$1" ]; then
+		writelog "ERROR" "${FUNCNAME[0]} - No game title was provided to search on -- Nothing to do!"
 		echo "A Game Title (part of it might be enough) is required as argument"
-	else
-		# Check installed game appmanifests for name matches
-		FOUNDMATCHES=()
 
-		# Steam games
-		while read -r APPMA; do
-			APPMATITLE="$( getValueFromAppManifest "name" "$APPMA" )"
-			if [[ ${APPMATITLE,,} == *"${1,,}"* ]]; then
-				APPMAAID="$( basename "${APPMA%.*}" | cut -d '_' -f2 )"
-				FOUNDGAMNAM="$( printf "%s\t\t(%s)" "$APPMAAID" "$APPMATITLE" )"  # Doing it this way makes tabs even for some reason
+		return 1
+	fi
+	# Check installed game appmanifests for name matches
+	FOUNDMATCHES=()
+
+	# Steam games
+	while read -r APPMA; do
+		APPMATITLE="$( getValueFromAppManifest "name" "$APPMA" )"
+		if [[ ${APPMATITLE,,} == *"${1,,}"* ]]; then
+			APPMAAID="$( basename "${APPMA%.*}" | cut -d '_' -f2 )"
+			FOUNDGAMNAM="$( printf "%s\t\t(%s)" "$APPMAAID" "$APPMATITLE" )"  # Doing it this way makes tabs even for some reason
+			FOUNDMATCHES+=( "$FOUNDGAMNAM" )
+		fi
+	done <<< "$( listAppManifests )"
+
+	# Steam shortcuts
+	if [ "$SEARCHSTEAMSHORTCUTS" -eq "1" ] && haveAnySteamShortcuts ; then
+		while read -r SCVDFE; do
+			SVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
+			SVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
+
+			if [[ ${SVDFENAME,,} == *"${1,,}"* ]]; then
+				FOUNDGAMNAM="$( printf "%s\t\t(%s)" "$SVDFEAID" "$SVDFENAME" )"
 				FOUNDMATCHES+=( "$FOUNDGAMNAM" )
 			fi
-		done <<< "$( listAppManifests )"
+		done <<< "$( getSteamShortcutHex )"
+	fi
 
-		# Steam shortcuts
-		if [ "$SEARCHSTEAMSHORTCUTS" -eq "1" ] && haveAnySteamShortcuts ; then
-			while read -r SCVDFE; do
-				SVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
-				SVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
-
-				if [[ ${SVDFENAME,,} == *"${1,,}"* ]]; then
-					FOUNDGAMNAM="$( printf "%s\t\t(%s)" "$SVDFEAID" "$SVDFENAME" )"
-					FOUNDMATCHES+=( "$FOUNDGAMNAM" )
-				fi
-			done <<< "$( getSteamShortcutHex )"
-		fi
-		if [ "${#FOUNDMATCHES[@]}" -gt 0 ]; then
-			printf "%s\n" "${FOUNDMATCHES[@]}"
-		else
-			echo "Could not find AppID for name '$1'."
-		fi
+	if [ "${#FOUNDMATCHES[@]}" -gt 0 ]; then
+		printf "%s\n" "${FOUNDMATCHES[@]}"
+	else
+		echo "Could not find AppID for name '$1'."
 	fi
 }
 
 function getTitleFromID {
 	SEARCHSTEAMSHORTCUTS="${2:-0}"  # Default to not searching Steam shortcuts
+	FOUNDGAMETITLE=""
 
 	if [ -z "$1" ]; then
+		writelog "ERROR" "${FUNCNAME[0]} - Did not get an AppID to search on -- Nothing to do!"
 		echo "A Game ID is required as argument"
-	else
-		if [ -f "$GEMETA/${1}.conf" ]; then
-			if grep -q "^NAME" "$GEMETA/${1}.conf"; then
-				grep "^NAME" "$GEMETA/${1}.conf" | cut -d '"' -f2
-			else
-				getAppInfoData "$1" "name"
-			fi
+
+		return 1;
+	fi
+
+	# Search meta file if we have one for Game Title
+	if [ -f "$GEMETA/${1}.conf" ]; then
+		if grep -q "^NAME" "$GEMETA/${1}.conf"; then
+			FOUNDGAMETITLE="$( grep "^NAME" "$GEMETA/${1}.conf" | cut -d '"' -f2 )"
 		else
-			# Try to get AppManifest based on passed ID if we don't have a data file
-			GAMEMANIFEST="$( listAppManifests | grep -m1 "appmanifest_${1}.acf" )"
-
-			if [ -n "$GAMEMANIFEST" ]; then
-				getValueFromAppManifest "name" "$GAMEMANIFEST"
-			elif [ "$SEARCHSTEAMSHORTCUTS" -eq "1" ] && haveAnySteamShortcuts ; then
-				# Steam shortcuts
-				while read -r SCVDFE; do
-					SVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
-					SVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
-
-					if [ "$SVDFEAID" -eq "$1" ]; then
-						echo "$SVDFENAME"
-						break
-					fi
-				done <<< "$( getSteamShortcutHex )"
-			else
-				echo "No Title found for '$1'"
-
-				return 1
-			fi
+			FOUNDGAMETITLE="$( getAppInfoData "$1" "name" )"
 		fi
 	fi
+
+	# Try to get title from Steam appmanifest if we didn't find Game Title in meta file
+	if [ -z "$FOUNDGAMETITLE" ]; then
+		GAMEMANIFEST="$( listAppManifests | grep -m1 "appmanifest_${1}.acf" )"
+
+		if [ -n "$GAMEMANIFEST" ]; then
+			FOUNDGAMETITLE="$( getValueFromAppManifest "name" "$GAMEMANIFEST" )"
+		fi
+	fi
+
+	# If we still haven't found the Game Title in the game meta file or appmanifest, check Steam Shortcuts if the option is enabled and if we have any
+	if [ -z "$FOUNDGAMETITLE" ] && [ "$SEARCHSTEAMSHORTCUTS" -eq "1" ] && haveAnySteamShortcuts ; then
+		while read -r SCVDFE; do
+			SVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
+			SVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
+
+			if [ "$SVDFEAID" -eq "$1" ]; then
+				FOUNDGAMETITLE="$SVDFENAME"
+				break
+			fi
+		done <<< "$( getSteamShortcutHex )"
+	fi
+
+	# If we didn't find the name in the STL meta file, Steam appmanifest, or shortcuts.vdf, give up
+	if [ -z "$FOUNDGAMETITLE" ]; then
+		echo "No Title found for '$1'"
+		return 1
+	fi
+
+	echo "$FOUNDGAMETITLE"
 }
 
 # Relies on game executable existing in STL meta file (i.e. any game launched before with STL)
@@ -7831,129 +7932,139 @@ function getGameExe {
 	SEARCHSTEAMSHORTCUTS="${2:-0}"  # Default to not searching Steam shortcuts
 
 	if [ -z "$1" ]; then
+		writelog "ERROR" "${FUNCNAME[0]} - Called getGameExe without AppID -- Nothing to do!"
 		echo "A Game ID is required as argument"
-	else
-		INAID="$1"
-		EXE=""
-		NOTFOUNDSTR="No Executable or SteamTinkerLaunch file found for '$1'"
 
-		# Try to get appid from game name -- If nultiple values, just pick first one
-		if ! [ "$INAID" -eq "$INAID" ] 2>/dev/null; then
-			INAID="$( getIDFromTitle "$INAID" | head -n1 )"
-			INAID="$( trimWhitespaces "${INAID%(*}")"
-		fi
-
-		EXEGAMNAM="$( getTitleFromID "$INAID" )"
-
-		if [ -n "$INAID" ] && [ -f "$GEMETA/${INAID}.conf" ]; then
-			# Some games might only have "EXECUTABLE" in their meta conf file
-			EXE="$(grep "^EXECUTABLE" "$GEMETA/${INAID}.conf" | cut -d '"' -f2)"
-			if [ -z "${EXE}" ]; then
-				EXE="$(grep "^GAMEEXE" "$GEMETA/${INAID}.conf" | cut -d '"' -f2)"
-			fi
-
-			if [ -n "$EXE" ]; then
-				EXE="$EXEGAMNAM ($INAID) -> $( getGameDir "$INAID" "only" )/$EXE"
-			fi
-		fi
-
-		if [ -z "$EXE" ] && [ "$SEARCHSTEAMSHORTCUTS" -eq 1 ] && haveAnySteamShortcuts ; then
-			# Have to search on all shortcuts because we need to check game name as fallback
-			while read -r SCVDFE; do
-				SCVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
-				SCVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
-				SCVDFEEXE="$( parseSteamShortcutEntryExe "$SCVDFE" )"
-
-				if [ "$SCVDFEAID" -eq "$1" ] 2>/dev/null || [[ ${SCVDFENAME,,} == *"${1,,}"* ]]; then
-					SCVDFEEXE="${SCVDFEEXE#\"}"
-					EXE="$SCVDFENAME ($SCVDFEAID) -> ${SCVDFEEXE%\"}"
-					break
-				fi
-			done <<< "$( getSteamShortcutHex )"
-		fi
-
-		echo "${EXE:-$NOTFOUNDSTR}"
+		return 1
 	fi
+
+	INAID="$1"
+	EXE=""
+	NOTFOUNDSTR="No Executable or SteamTinkerLaunch file found for '$1'"
+
+	# Try to get appid from game name -- If multiple values, just pick first one
+	if ! [ "$INAID" -eq "$INAID" ] 2>/dev/null; then
+		INAID="$( getIDFromTitle "$INAID" | head -n1 )"
+		INAID="$( trimWhitespaces "${INAID%(*}")"
+	fi
+
+	EXEGAMNAM="$( getTitleFromID "$INAID" )"
+
+	# Try to get game EXE from STL meta file
+	if [ -n "$INAID" ] && [ -f "$GEMETA/${INAID}.conf" ]; then
+		# Some games might only have "EXECUTABLE" in their meta conf file
+		EXE="$(grep "^EXECUTABLE" "$GEMETA/${INAID}.conf" | cut -d '"' -f2)"
+		if [ -z "${EXE}" ]; then
+			EXE="$(grep "^GAMEEXE" "$GEMETA/${INAID}.conf" | cut -d '"' -f2)"
+		fi
+
+		if [ -n "$EXE" ]; then
+			EXE="$EXEGAMNAM ($INAID) -> $( getGameDir "$INAID" "only" )/$EXE"
+		fi
+	fi
+
+	# Search on game shortcuts if EXE still not found
+	if [ -z "$EXE" ] && [ "$SEARCHSTEAMSHORTCUTS" -eq 1 ] && haveAnySteamShortcuts ; then
+		# Have to search on all shortcuts because we need to check game name as fallback
+		while read -r SCVDFE; do
+			SCVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
+			SCVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
+			SCVDFEEXE="$( parseSteamShortcutEntryExe "$SCVDFE" )"
+
+			if [ "$SCVDFEAID" -eq "$1" ] 2>/dev/null || [[ ${SCVDFENAME,,} == *"${1,,}"* ]]; then
+				SCVDFEEXE="${SCVDFEEXE#\"}"
+				EXE="$SCVDFENAME ($SCVDFEAID) -> ${SCVDFEEXE%\"}"
+				break
+			fi
+		done <<< "$( getSteamShortcutHex )"
+	fi
+
+	echo "${EXE:-$NOTFOUNDSTR}"
 }
 
 function getCompatData {
 	SEARCHSTEAMSHORTCUTS="${2:-0}"  # Default to not searching Steam shortcuts
 
 	if [ -z "$1" ]; then
+		writelog "ERROR" "${FUNCNAME[0]} - No AppID or Game Title provided -- Nothing to do!"
 		echo "A Game ID or Game Title is required as argument"
-	else
-		# Sometimes the name here is not extact e.g. "SonicFrontiers" for "Sonic Frontiers", so the else fallback fetches using getGameDir
-		# If the compat folder doesn't exist *at all* then the final else will get triggered, but this should probably always exist (even if its empty)
-		if [ -d "$STLCOMPDAT" ]; then
-			unset FCOMPDAT
 
-			# Skips games which have ';' in the name (i.e. "ROBOTICS;NOTES"), as this throws off the 'cut' command, and instead we fall back to the getGameDir check
-			if [ "$1" -eq "$1" ] 2>/dev/null; then  # This is for AppID check (-eq will fail if not integer expression)
-				while read -r "complink"; do
-					TEST="$(readlink "$complink" | grep "/$1$")"
-					if [ -d "$TEST" ] && ! [[ "${complink##*/}" == *";"* ]]; then
-						FCOMPDAT="${complink##*/};$TEST"
-					fi
-				done <<< "$(find "$STLCOMPDAT")"
-			else  # This is for Game Name checks
-				TEST="$(find "$STLCOMPDAT" -iname "*${1}*" | head -n1)"
-				if [ -n "$TEST" ] && ! [[ "${TEST##*/}" == *";"* ]]; then
-					FCOMPDAT="${TEST##*/};$(readlink "$TEST")"
+		return 1
+	fi
+
+	# SteamTinkerLaunch stores a symlinkk to the prefix of each game launched with it,
+	# so if we have this folder we can try to find if we have a symlink to the desired game's prefix as it may be faster
+	if [ -d "$STLCOMPDAT" ]; then
+		# Skips games which have ';' in the name (i.e. "ROBOTICS;NOTES"), as this throws off the 'cut' command, and instead we fall back to the getGameDir check
+		if [ "$1" -eq "$1" ] 2>/dev/null; then  # This is for AppID check (-eq will fail if not integer expression)
+			while read -r "complink"; do
+				TEST="$(readlink "$complink" | grep "/$1$")"
+				if [ -d "$TEST" ] && ! [[ "${complink##*/}" == *";"* ]]; then
+					FCOMPDAT="${complink##*/};$TEST"
+					break
 				fi
+			done <<< "$(find "$STLCOMPDAT")"
+		else  # This is for Game Name checks
+			TEST="$(find "$STLCOMPDAT" -iname "*${1}*" | head -n1)"
+			if [ -n "$TEST" ] && ! [[ "${TEST##*/}" == *";"* ]]; then
+				FCOMPDAT="${TEST##*/};$(readlink "$TEST")"
 			fi
+		fi
 
-			if [ -n "$FCOMPDAT" ]; then
-				COMPATGAMENAME="$( echo "$FCOMPDAT" | cut -d ";" -f 1 )"
-				COMPATGAMEPATH="$( echo "$FCOMPDAT" | cut -d ";" -f 2 )"
-				COMPATGAMEAID="$( basename "$COMPATGAMEPATH" )"
+		# If we found a matching compatdata, return it here
+		if [ -n "$FCOMPDAT" ]; then
+			COMPATGAMENAME="$( echo "$FCOMPDAT" | cut -d ";" -f 1 )"
+			COMPATGAMEPATH="$( echo "$FCOMPDAT" | cut -d ";" -f 2 )"
+			COMPATGAMEAID="$( basename "$COMPATGAMEPATH" )"
 
-				echo "${COMPATGAMENAME} (${COMPATGAMEAID}) -> ${COMPATGAMEPATH}"
-			else
-				# If no symlink found in STL dir, check the game's library folder, with fallback to the Steam root library folder (i.e. non-steam games)
-				writelog "INFO" "${FUNCNAME[0]} - Could not find compatdata named in STL symlink dir, searching with getGameLibraryFolder..."
-				SEARCHGAMEDIR="$( getGameDir "$1" )"
+			echo "${COMPATGAMENAME} (${COMPATGAMEAID}) -> ${COMPATGAMEPATH}"
 
-				COMPATGAMESTR=""  # Final output string
-				NOTFOUNDSTR="No $CODA dir found for '$1'"
-				COMPATGAMEPATH="${SEARCHGAMEDIR##*-> }"
-				if [ -d "$COMPATGAMEPATH" ]; then
-					COMPATGAMENAME="$( echo "${SEARCHGAMEDIR%(*}" | xargs )" # e.g. TEKKEN 7
-					COMPATGAMEAID="$( echo "$SEARCHGAMEDIR" | grep -oE '\([^)]+\)' | tail -n1 | sed 's:(::g;s:)::g' )"  # e.g. 389730
-
-					LIFOCOMPATDIR="$( realpath "$COMPATGAMEPATH/../../$CODA/$COMPATGAMEAID" )"
-					SROOTCOMPATDIR="$SROOT/$SA/$CODA/$COMPATGAMEAID"
-
-					COMPATDATADIR="$( [ -d "$LIFOCOMPATDIR" ] && echo "$LIFOCOMPATDIR" || echo "$SROOTCOMPATDIR" )"
-					if [ -d "$COMPATDATADIR" ]; then
-						COMPATGAMESTR="$COMPATGAMENAME ($COMPATGAMEAID) -> $COMPATDATADIR"
-					fi
-				fi
-
-				# Check Steam Shortcuts for games never launched with STL
-				if [ ! -d "$SEARCHGAMEDIR" ] && [ "$SEARCHSTEAMSHORTCUTS" -eq 1 ] && haveAnySteamShortcuts ; then
-					while read -r SCVDFE; do
-						SCVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
-						SCVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
-
-						## If we have a match, build a hardcoded compatdata pointing at the Steam Root compatdata dir and if it exists, return that
-						## Seems like this is always where Steam generates compatdata for Non-Steam Games
-						## may instead be primary drive which defaults to Steam Root, but for now looks like Steam Root is the main place, so should work most of the time
-						if [ "$SCVDFEAID" -eq "$1" ] 2>/dev/null || [[ ${SCVDFENAME,,} == *"${1,,}"* ]]; then
-							SCVDFECODA="$SROOT/$SA/$CODA/${SCVDFEAID}"
-							if [ -d "$SCVDFECODA" ]; then
-								COMPATGAMESTR="$SCVDFENAME ($SCVDFEAID) -> $SCVDFECODA"
-							fi
-							break
-						fi
-					done <<< "$( getSteamShortcutHex )"
-				fi
-
-				echo "${COMPATGAMESTR:-$NOTFOUNDSTR}"
-			fi
-		else
-			echo "No $CODA dir found for '$1'"
+			return 0
 		fi
 	fi
+
+	unset FCOMPDAT
+
+	# If no symlink found in STL dir, check the game's library folder, with fallback to the Steam root library folder (i.e. Non-Steam Games)
+	writelog "INFO" "${FUNCNAME[0]} - Could not find compatdata named in STL symlink dir, searching with getGameLibraryFolder..."
+	SEARCHGAMEDIR="$( getGameDir "$1" )"
+
+	COMPATGAMESTR=""  # Final output string
+	NOTFOUNDSTR="No $CODA dir found for '$1'"
+	COMPATGAMEPATH="${SEARCHGAMEDIR##*-> }"
+	if [ -d "$COMPATGAMEPATH" ]; then
+		COMPATGAMENAME="$( echo "${SEARCHGAMEDIR%(*}" | xargs )" # e.g. TEKKEN 7
+		COMPATGAMEAID="$( echo "$SEARCHGAMEDIR" | grep -oE '\([^)]+\)' | tail -n1 | sed 's:(::g;s:)::g' )"  # e.g. 389730
+
+		LIFOCOMPATDIR="$( realpath "$COMPATGAMEPATH/../../$CODA/$COMPATGAMEAID" )"
+		SROOTCOMPATDIR="$SROOT/$SA/$CODA/$COMPATGAMEAID"
+
+		COMPATDATADIR="$( [ -d "$LIFOCOMPATDIR" ] && echo "$LIFOCOMPATDIR" || echo "$SROOTCOMPATDIR" )"
+		if [ -d "$COMPATDATADIR" ]; then
+			COMPATGAMESTR="$COMPATGAMENAME ($COMPATGAMEAID) -> $COMPATDATADIR"
+		fi
+	fi
+
+	# Check Steam Shortcuts for games never launched with STL
+	if [ ! -d "$SEARCHGAMEDIR" ] && [ "$SEARCHSTEAMSHORTCUTS" -eq 1 ] && haveAnySteamShortcuts ; then
+		while read -r SCVDFE; do
+			SCVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
+			SCVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
+
+			## If we have a match, build a hardcoded compatdata pointing at the Steam Root compatdata dir and if it exists, return that
+			## Seems like this is always where Steam generates compatdata for Non-Steam Games
+			## may instead be primary drive which defaults to Steam Root, but for now looks like Steam Root is the main place, so should work most of the time
+			if [ "$SCVDFEAID" -eq "$1" ] 2>/dev/null || [[ ${SCVDFENAME,,} == *"${1,,}"* ]]; then
+				SCVDFECODA="$SROOT/$SA/$CODA/${SCVDFEAID}"
+				if [ -d "$SCVDFECODA" ]; then
+					COMPATGAMESTR="$SCVDFENAME ($SCVDFEAID) -> $SCVDFECODA"
+				fi
+				break
+			fi
+		done <<< "$( getSteamShortcutHex )"
+	fi
+
+	echo "${COMPATGAMESTR:-$NOTFOUNDSTR}"
 }
 
 # Credit to StackOverflow community wiki
@@ -7979,81 +8090,88 @@ function getGameDir {
 	SEARCHSTEAMSHORTCUTS="${3:-0}"  # Default to not searching Steam shortcuts
 	FOUNDINSTEAMSHORTCUTS=0
 
+	# Exit early if no search name/appid is given
 	if [ -z "$1" ]; then
+		writelog "ERROR" "${FUNCNAME[0]} - Missing GameID or Game Title to search on -- Nothing to do!"
 		echo "A Game ID or Game Title is required as argument"
-	else
-		# First assume user entered AppID, then if no AppManifest found, try get AppID from name and search on that
-		SEARCHMANIFEST="$( listAppManifests | grep -m1 "appmanifest_${1}.acf" )"
+
+		return 1
+	fi
+
+	# First assume user entered AppID, then if no AppManifest found, try get AppID from name and search on that
+	SEARCHMANIFEST="$( listAppManifests | grep -m1 "appmanifest_${1}.acf" )"
+	if [ -z "$SEARCHMANIFEST" ]; then
+		writelog "INFO" "${FUNCNAME[0]} - Could not find App Manifest with entered argument '$1' - Assuming it is a game title and trying to find its AppID from title"
+		SEARCHGETIDFROMTITLE="$( getIDFromTitle "$1" | head -n1 )"
+
+		writelog "INFO" "${FUNCNAME[0]} - called 'getIDFromTitle' for argument '$1', it returned '$SEARCHGETIDFROMTITLE'"
+		SEARCHAID="$( echo "$SEARCHGETIDFROMTITLE" | cut -d "(" -f 1 | xargs)"
+
+		writelog "INFO" "${FUNCNAME[0]} - Extracted AppID from 'getIDFromTitle' result is '$SEARCHAID' - Searching for App Manifest with this AppID"
+
+		SEARCHMANIFEST="$( listAppManifests | grep -m1 "appmanifest_${SEARCHAID}.acf" )"
+
+		# This nesting is ugly, but only exists for logging purposes
 		if [ -z "$SEARCHMANIFEST" ]; then
-			writelog "INFO" "${FUNCNAME[0]} - Could not find App Manifest with entered argument '$1' - Assuming it is a game title and trying to find its AppID from title"
-			SEARCHGETIDFROMTITLE="$( getIDFromTitle "$1" | head -n1 )"
-
-			writelog "INFO" "${FUNCNAME[0]} - called 'getIDFromTitle' for argument '$1', it returned '$SEARCHGETIDFROMTITLE'"
-			SEARCHAID="$( echo "$SEARCHGETIDFROMTITLE" | cut -d "(" -f 1 | xargs)"
-
-			writelog "INFO" "${FUNCNAME[0]} - Extracted AppID from 'getIDFromTitle' result is '$SEARCHAID' - Searching for App Manifest with this AppID"
-
-			SEARCHMANIFEST="$( listAppManifests | grep -m1 "appmanifest_${SEARCHAID}.acf" )"
-			if [ -z "$SEARCHMANIFEST" ]; then
-				if [ "$SEARCHSTEAMSHORTCUTS" -eq 0 ]; then
-					writelog "ERROR" "${FUNCNAME[0]} - Could not find game directory for '$1' - Maybe it is not installed"
-					echo "Could not find game directory for '$1'"
-					return 1
-				else
-					writelog "WARN" "${FUNCNAME[0]} - Could not find game directory for '$1' - Will search on Steam Shortcuts next"
-				fi
+			if [ "$SEARCHSTEAMSHORTCUTS" -eq 0 ]; then
+				writelog "ERROR" "${FUNCNAME[0]} - Could not find game directory for '$1' - Maybe it is not installed"
 			else
-				writelog "INFO" "${FUNCNAME[0]} - Found matching App Manifest '$SEARCHMANIFEST'"
+				writelog "WARN" "${FUNCNAME[0]} - Could not find game directory for '$1' - Will search on Steam Shortcuts next"
 			fi
 		else
-			writelog "INFO" "${FUNCNAME[0]} - Found matching App Manifest file for presumed entered AppID '$1' - Manifest file is '$SEARCHMANIFEST'"
+			writelog "INFO" "${FUNCNAME[0]} - Found matching App Manifest '$SEARCHMANIFEST'"
 		fi
+	else
+		writelog "INFO" "${FUNCNAME[0]} - Found matching App Manifest file for presumed entered AppID '$1' - Manifest file is '$SEARCHMANIFEST'"
+	fi
 
-		APPMAINSTDIR="$( getValueFromAppManifest "installdir" "$SEARCHMANIFEST" 2>/dev/null )"
-		APPMALIBFLDR="$( dirname "$SEARCHMANIFEST" )"
-		GAMINSTDIR="$APPMALIBFLDR/common/$APPMAINSTDIR"
-		MUSINSTDIR="$APPMALIBFLDR/music/$APPMAINSTDIR"  # Fixes a not found error for installed soundtracks
+	APPMAINSTDIR="$( getValueFromAppManifest "installdir" "$SEARCHMANIFEST" 2>/dev/null )"
+	APPMALIBFLDR="$( dirname "$SEARCHMANIFEST" )"
+	GAMINSTDIR="$APPMALIBFLDR/common/$APPMAINSTDIR"
+	MUSINSTDIR="$APPMALIBFLDR/music/$APPMAINSTDIR"  # Fixes a not found error for installed soundtracks
 
-		# If still not found, optionally search Steam shortcuts
-		if [ ! -d "$GAMINSTDIR" ] && [ "$SEARCHSTEAMSHORTCUTS" -eq 1 ] && haveAnySteamShortcuts ; then
-			while read -r SCVDFE; do
-				SCVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
-				SCVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
-				SCVDFEEXE="$( parseSteamShortcutEntryExe "$SCVDFE" )"
+	# If still not found, optionally search Steam shortcuts
+	if [ ! -d "$GAMINSTDIR" ] && [ "$SEARCHSTEAMSHORTCUTS" -eq 1 ] && haveAnySteamShortcuts ; then
+		while read -r SCVDFE; do
+			SCVDFEAID="$( parseSteamShortcutEntryAppID "$SCVDFE" )"
+			SCVDFENAME="$( parseSteamShortcutEntryAppName "$SCVDFE" )"
+			SCVDFEEXE="$( parseSteamShortcutEntryExe "$SCVDFE" )"
 
-				## If we have a match, build a hardcoded compatdata pointing at the Steam Root compatdata dir and if it exists, return that
-				## Seems like this is always where Steam generates compatdata for Non-Steam Games
-				## may instead be primary drive which defaults to Steam Root, but for now looks like Steam Root is the main place, so should work most of the time
-				if [ "$SCVDFEAID" -eq "$1" ] 2>/dev/null || [[ ${SCVDFENAME,,} == *"${1,,}"* ]]; then
-					APPMAGN="${SCVDFENAME}"
-					APPMAAID="${SCVDFEAID}"
-					GAMINSTDIR="$( dirname "${SCVDFEEXE}" )"  # Could still fail if EXE dir no longer exists, but edge case
+			## If we have a match, build a hardcoded compatdata pointing at the Steam Root compatdata dir and if it exists, return that
+			## Seems like this is always where Steam generates compatdata for Non-Steam Games
+			## may instead be primary drive which defaults to Steam Root, but for now looks like Steam Root is the main place, so should work most of the time
+			if [ "$SCVDFEAID" -eq "$1" ] 2>/dev/null || [[ ${SCVDFENAME,,} == *"${1,,}"* ]]; then
+				APPMAGN="${SCVDFENAME}"
+				APPMAAID="${SCVDFEAID}"
+				GAMINSTDIR="$( dirname "${SCVDFEEXE}" )"  # Could still fail if EXE dir no longer exists, but edge case
 
-					# TODO make this a function later, we use this a lot
-					GAMINSTDIR="${GAMINSTDIR#\"}"
-					GAMINSTDIR="${GAMINSTDIR%\"}"
+				# TODO make this a function later, we use this a lot
+				GAMINSTDIR="${GAMINSTDIR#\"}"
+				GAMINSTDIR="${GAMINSTDIR%\"}"
 
-					FOUNDINSTEAMSHORTCUTS=1
-					break
-				fi
-			done <<< "$( getSteamShortcutHex )"
-		fi
-
-		if [ -d "$GAMINSTDIR" ] || [ -d "$MUSINSTDIR" ]; then
-			# Don't fetch these if we found and set the information already from a Steam shortcuts
-			if [ "$FOUNDINSTEAMSHORTCUTS" -eq 0 ]; then
-				APPMAGN="$( getValueFromAppManifest "name" "$SEARCHMANIFEST" )"
-				APPMAAID="$( getValueFromAppManifest "appid" "$SEARCHMANIFEST" )"
+				FOUNDINSTEAMSHORTCUTS=1
+				break
 			fi
+		done <<< "$( getSteamShortcutHex )"
+	fi
 
-			if [ -z "$ONLYPATH" ]; then
-				printf "%s (%s) -> %s\n" "$APPMAGN" "$APPMAAID" "$GAMINSTDIR"
-			else
-				printf "%s\n" "$GAMINSTDIR"  # Only output path, used by "listSteamGames"
-			fi
-		else
-			echo "Could not find install directory for '$1'"
-		fi
+	# Exit now if we didn't find the game directory
+	if [ ! -d "${GAMINSTDIR}" ] && [ ! -d "${MUSINSTDIR}" ]; then
+		echo "Could not find install directory for '$1'"
+		return 1
+	fi
+
+	# Don't fetch these if we found and set the information already from a Steam shortcuts, since we already set these variables if we found a Steam shortcut
+	# We don't get here if we didn't find a game dir for either a Steam game or shortcut
+	if [ "$FOUNDINSTEAMSHORTCUTS" -eq 0 ]; then
+		APPMAGN="$( getValueFromAppManifest "name" "$SEARCHMANIFEST" )"
+		APPMAAID="$( getValueFromAppManifest "appid" "$SEARCHMANIFEST" )"
+	fi
+
+	if [ -z "$ONLYPATH" ]; then
+		printf "%s (%s) -> %s\n" "$APPMAGN" "$APPMAAID" "$GAMINSTDIR"
+	else
+		printf "%s\n" "$GAMINSTDIR"  # Only output path, used by "listSteamGames"
 	fi
 }
 
@@ -10992,10 +11110,10 @@ function setGameScopeVars {
 			if grep -qw "$FLAG" <<< "$ARGS"; then
 				if [[ $ARGTYPE =~ "cb" ]] || [[ $ARGTYPE =~ "num" ]]; then
 					# Get the value given to the argument as the enabled/selected value, e.g. get '2' from '-U 2' if we passed '-U'
-					tr ' ' '\n' <<< "$ARGS" | grep -A1 "$FLAG" | tail -n1
+					tr ' ' '\n' <<< "$ARGS" | grep -wA1 "$FLAG" | tail -n1
 				elif [[ $ARGTYPE =~ "path" ]] || [[ $ARGTYPE =~ "txt" ]]; then
 					# Get value given to arguments with two dashes, like `--`
-					echo "$ARGS" | sed 's:--:\n--:g' | grep -A1 "$FLAG" | sed "s:${UNESCAPED_FLAG}::g;s:-:\n-:g" | head -n1 | xargs
+					echo "$ARGS" | sed 's:--:\n--:g' | grep -wA1 "$FLAG" | sed "s:${UNESCAPED_FLAG}::g;s:-:\n-:g" | head -n1 | xargs
 				else
 					echo "$TRUEVAL"
 				fi
@@ -11062,6 +11180,9 @@ function setGameScopeVars {
 		GSENABLECUSTCUR="0"
 		GSCURSOR="$( getGameScopeArg "$GAMESCOPE_ARGS" "--cursor" "$GSCURSOR" "" "" "path" )"
 		if [ -n "$GSCURSOR" ]; then  GSENABLECUSTCUR="1"; fi
+
+		# Mouse Sensitivity (-s) -- Spinner
+		GSMOUSESENSITIVITY="$( getGameScopeArg "$GAMESCOPE_ARGS" "-s" "$GSMOUSESENSITIVITY" "" "1.0" "num" )"
 
 		# There is a `--cursor-scale-height` option, but at time of writing (15/02/23) this doesn't seem to do anything - We can add it in future, but not now
 		# There is a `--framerate-limit` option, but I am not totally sure how it differs from -r/-o -- I tested it out and the behaviour seemed identical? Maybe one works in both nested/embedded and the other doesn't, not sure...
@@ -11338,6 +11459,7 @@ function GameScopeGui {
 			--field="$GUI_GSFOOR!$DESC_GSFOOR ('GSFOOR')":CB "$(cleanDropDown "${GSFOOR}" "${GSFOOROPTS}")" \
 			--field="$GUI_GSENABLECUSTCUR!$GUI_GSENABLECUSTCUR ('GSENABLECUSTCUR')":CHK "$GSENABLECUSTCUR" \
 			--field="$GUI_GSCURSOR!$DESC_GSCURSOR ('GSCURSOR')":FL "${GSCURSOR/#-/ -}" \
+			--field="$GUI_GSMOUSESENSITIVITY!$DESC_GSMOUSESENSITIVITY ('GSMOUSESENSITIVITY')":NUM "${GSMOUSESENSITIVITY/#-/ -}" \
 			--field="$(spanFont "$GUI_GSFILTERINGSET" "H")":LBL "SKIP" \
 			--field="$GUI_GSFLTR!$DESC_GSFLTR ('GSFLTR')":CBE "$(cleanDropDown "${GSFLTR}" "${GSFLTROPTS}")" \
 			--field="$GUI_GSSCALE!$DESC_GSSCALE ('GSSCALE')":CBE "$(cleanDropDown "${GSSCALE}" "${GSSCALEOPTS}")" \
@@ -11398,71 +11520,94 @@ function GameScopeGui {
 				    }
 				;;
 				4)	{
-						# TODO This section could still be simplified a bit further probably
+						## TODO This section could still be simplified a bit further probably
 
 						# Get selected GameScope options
 						mapfile -d "|" -t -O "${#GSARR[@]}" GSARR < <(printf '%s' "$GASCOS")
+
+						# Use "relative positioning" type system by calculating the position/index of each heading, and using this to get the values at a given index in the GSARR array
+						# for example GSFILTERHEADING=16, then the first element will be GSFILTERHEADING + 1
+						# This is ${GSARR[17]}, but if we were to add another option to the General settings, we would only need to bump GSGENERALOPTSLEN to 16
+						GSGENERALHEADING=0  # Index in GSARR of General heading label
+						GSGENERALOPTSLEN=15
+
+						GSFILTERINGHEADING=$(( GSGENERALHEADING +  GSGENERALOPTSLEN + 1 )) # Index in GSARR of Filtering heading label
+						GSFILTERINGOPTSLEN=6
+
+						GSHDRHEADING=$(( GSFILTERINGHEADING + GSFILTERINGOPTSLEN + 1 ))
+						GSHDROPTSLEN=6
+
+						GSVRHEADING=$(( GSHDRHEADING + GSHDROPTSLEN + 1 ))
+						GSVROPTSLEN=12
+
+						GSEMBEDDEDHEADING=$(( GSVRHEADING + GSVROPTSLEN + 1 ))
+						GSEMBEDDEDOPTSLEN=5
+
+						GSADVANCEDHEADING=$(( GSEMBEDDEDHEADING + GSEMBEDDEDOPTSLEN + 1 ))
+						# GSADVANCEDOPTSLEN=12  # Commented because Shellcheck gets angry about this being unused, but it is a good reference
+
 						# GSARR[0] is the General heading
-						GSINTRES="${GSARR[1]}"
-						GSSHWRES="${GSARR[2]}"
-						GSFLR="${GSARR[3]}"
-						GSFLU="${GSARR[4]}"
-						USEGAMESCOPE="${GSARR[5]}"
-						GSFS="${GSARR[6]}"
-						GSBW="${GSARR[7]}"
-						GSSE="${GSARR[8]}"
-						GSFWF="${GSARR[9]}"
-						GSFGC="${GSARR[10]}"
-						GSFGK="${GSARR[11]}"
-						GSFOOR="${GSARR[12]}"
-						GSENABLECUSTCUR="${GSARR[13]}"
-						GSCURSOR="${GSARR[14]}"
-						# GSARR[15] is the Filtering heading
-						GSFLTR="${GSARR[16]}"
-						GSSCALE="${GSARR[17]}"
-						GSFSRS="${GSARR[18]}"
-						GSMSF="${GSARR[19]}"
-						GSRSEP="${GSARR[20]}"
-						GSRSTI="${GSARR[21]}"
-						# GSARR[22] is the HDR heading
-						GSHDR="${GSARR[23]}"
-						GSHDRWGFS="${GSARR[24]}"
-						GSHDRSCNITS="${GSARR[25]}"
-						GSHDRITM="${GSARR[26]}"
-						GSHDRITMSDRNITS="${GSARR[27]}"
-						GSHDRITMTGTNITS="${GSARR[28]}"
-						# GSARR[29] is the VR heading
-						GSVR="${GSARR[30]}"
-						GSVREXNA="${GSARR[31]}"
-						GSVRDEFNAM="${GSARR[32]}"
-						GSVROVERLAYKEY="${GSARR[33]}"
-						GSVRICONENABLE="${GSARR[34]}"
-						GSVRICON="${GSARR[35]}"
-						GSVRSHOIMM="${GSARR[36]}"
-						GSVRCONTROLBAR="${GSARR[37]}"
-						GSVRCONTROLBARKEYBOARD="${GSARR[38]}"
-						GSVRCONTROLBARCLOSE="${GSARR[39]}"
-						GSVRSCROLLSSPEED="${GSARR[40]}"
-						GSVRMODAL="${GSARR[41]}"
-						# GSARR[42] is the Embedded heading
-						GSDEFTOUCHMODE="${GSARR[43]}"
-						GSIMMEDIATEFLIPS="${GSARR[44]}"
-						GSADAPTIVESYNC="${GSARR[45]}"
-						GSPREFOUT="${GSARR[46]}"
-						GSDRMMODE="${GSARR[47]}"
-						# GSARR[48] is the Advanced heading
-						GSSTATSPATHENABLE="${GSARR[49]}"
-						GSSTATSPATH="${GSARR[50]}"
-						GSHIDECURSORDELAY="${GSARR[51]}"
-						GSFORCECOMP="${GSARR[52]}"
-						GSDEBUGHUD="${GSARR[53]}"
-						GSFORCEHDRSUPPORT="${GSARR[54]}"
-						GSFORCEHDROUTPUT="${GSARR[55]}"
-						GSPREFERVKDEVICE="${GSARR[56]}"
-						GSWAYLAND="${GSARR[57]}"
-						GSRT="${GSARR[58]}"
-						GSHDLS="${GSARR[59]}"
-						USEGAMESCOPEWSI="${GSARR[60]}"
+						GSINTRES="${GSARR[$GSGENERALHEADING + 1]}"
+						GSSHWRES="${GSARR[$GSGENERALHEADING + 2]}"
+						GSFLR="${GSARR[$GSGENERALHEADING + 3]}"
+						GSFLU="${GSARR[$GSGENERALHEADING + 4]}"
+						USEGAMESCOPE="${GSARR[$GSGENERALHEADING + 5]}"
+						GSFS="${GSARR[$GSGENERALHEADING + 6]}"
+						GSBW="${GSARR[$GSGENERALHEADING + 7]}"
+						GSSE="${GSARR[$GSGENERALHEADING + 8]}"
+						GSFWF="${GSARR[$GSGENERALHEADING + 9]}"
+						GSFGC="${GSARR[$GSGENERALHEADING + 10]}"
+						GSFGK="${GSARR[$GSGENERALHEADING + 11]}"
+						GSFOOR="${GSARR[$GSGENERALHEADING + 12]}"
+						GSENABLECUSTCUR="${GSARR[$GSGENERALHEADING + 13]}"
+						GSCURSOR="${GSARR[$GSGENERALHEADING + 14]}"
+						GSMOUSESENSITIVITY="${GSARR[$GSGENERALHEADING + 15]}"
+						# GSARR[16] is the Filtering heading
+						GSFLTR="${GSARR[$GSFILTERINGHEADING + 1]}"
+						GSSCALE="${GSARR[$GSFILTERINGHEADING + 2]}"
+						GSFSRS="${GSARR[$GSFILTERINGHEADING + 3]}"
+						GSMSF="${GSARR[$GSFILTERINGHEADING + 4]}"
+						GSRSEP="${GSARR[$GSFILTERINGHEADING + 5]}"
+						GSRSTI="${GSARR[$GSFILTERINGHEADING + 6]}"
+						# GSARR[23] is the HDR heading
+						GSHDR="${GSARR[$GSHDRHEADING + 1]}"
+						GSHDRWGFS="${GSARR[$GSHDRHEADING + 2]}"
+						GSHDRSCNITS="${GSARR[$GSHDRHEADING + 3]}"
+						GSHDRITM="${GSARR[$GSHDRHEADING + 4]}"
+						GSHDRITMSDRNITS="${GSARR[$GSHDRHEADING + 5]}"
+						GSHDRITMTGTNITS="${GSARR[$GSHDRHEADING + 6]}"
+						# GSARR[30] is the VR heading
+						GSVR="${GSARR[$GSVRHEADING + 1]}"
+						GSVREXNA="${GSARR[$GSVRHEADING + 2]}"
+						GSVRDEFNAM="${GSARR[$GSVRHEADING + 3]}"
+						GSVROVERLAYKEY="${GSARR[$GSVRHEADING + 4]}"
+						GSVRICONENABLE="${GSARR[$GSVRHEADING + 5]}"
+						GSVRICON="${GSARR[$GSVRHEADING + 6]}"
+						GSVRSHOIMM="${GSARR[$GSVRHEADING + 7]}"
+						GSVRCONTROLBAR="${GSARR[$GSVRHEADING + 8]}"
+						GSVRCONTROLBARKEYBOARD="${GSARR[$GSVRHEADING + 9]}"
+						GSVRCONTROLBARCLOSE="${GSARR[$GSVRHEADING + 10]}"
+						GSVRSCROLLSSPEED="${GSARR[$GSVRHEADING + 11]}"
+						GSVRMODAL="${GSARR[$GSVRHEADING + 12]}"
+						# GSARR[43] is the Embedded heading
+						GSDEFTOUCHMODE="${GSARR[$GSEMBEDDEDHEADING + 1]}"
+						GSIMMEDIATEFLIPS="${GSARR[$GSEMBEDDEDHEADING + 2]}"
+						GSADAPTIVESYNC="${GSARR[$GSEMBEDDEDHEADING + 3]}"
+						GSPREFOUT="${GSARR[$GSEMBEDDEDHEADING + 4]}"
+						GSDRMMODE="${GSARR[$GSEMBEDDEDHEADING + 5]}"
+						# GSARR[49] is the Advanced heading
+						GSSTATSPATHENABLE="${GSARR[$GSADVANCEDHEADING + 1]}"
+						GSSTATSPATH="${GSARR[$GSADVANCEDHEADING + 2]}"
+						GSHIDECURSORDELAY="${GSARR[$GSADVANCEDHEADING + 3]}"
+						GSFORCECOMP="${GSARR[$GSADVANCEDHEADING + 4]}"
+						GSDEBUGHUD="${GSARR[$GSADVANCEDHEADING + 5]}"
+						GSFORCEHDRSUPPORT="${GSARR[$GSADVANCEDHEADING + 6]}"
+						GSFORCEHDROUTPUT="${GSARR[$GSADVANCEDHEADING + 7]}"
+						GSPREFERVKDEVICE="${GSARR[$GSADVANCEDHEADING + 8]}"
+						GSWAYLAND="${GSARR[$GSADVANCEDHEADING + 9]}"
+						GSRT="${GSARR[$GSADVANCEDHEADING + 10]}"
+						GSHDLS="${GSARR[$GSADVANCEDHEADING + 11]}"
+						USEGAMESCOPEWSI="${GSARR[$GSADVANCEDHEADING + 12]}"
 
 						# Build the GameScope arguments string
 						unset GAMESCOPE_ARGS
@@ -11488,6 +11633,7 @@ function GameScopeGui {
 						if [ "$GSFGC" == "TRUE" ]                                       ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --force-grab-cursor"; fi
 						if [ "$GSFGK" == "TRUE" ]                                       ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -g"; fi
 						if [ -f "$GSCURSOR" ] && [ "$GSENABLECUSTCUR" == "TRUE" ]       ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --cursor '${GSCURSOR}'"; fi
+						if [ "$GSMOUSESENSITIVITY" -gt 1 ]							; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -s ${GSMOUSESENSITIVITY}"; fi
 						if [ ! "$GSFOOR" == "$GSNORM" ] && [ -n "$GSFOOR" ]             ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --force-orientation ${GSFOOR}"; fi  # Only force orientation if option other than default 'normal' is selected
 						### GENERAL OPTIONS END ###
 
@@ -11803,11 +11949,15 @@ function getWinecfgExecutable {
 		OTWINECFGEXE="$WINECFG"
 	else
 		# Try to use winecfg with Proton executable
-		writelog "INFO" "${FUNCNAME[0]} - Trying to use Winetricks with game Proton version"
+		writelog "INFO" "${FUNCNAME[0]} - Trying to use Winetrickks with game Proton version"
 		if [ -z "$RUNPROTON" ]; then
 			writelog "WARN" "${FUNCNAME[0]} - RUNPROTON is empty - '$RUNPROTON' - Maybe this is not a Proton game?"
 		else
 			WINECFGBASEPATH="$(dirname "$RUNPROTON")"
+
+			writelog "INFO" "${FUNCNAME[0]} - RUNPROTON is '$RUNPROTON'"
+			writelog "INFO" "${FUNCNAME[0]} - WINECFGBASEPATH is '$WINECFGBASEPATH'"
+
 			if [ -d "$WINECFGBASEPATH" ]; then
 				OTWINECFGEXE="$( find "$WINECFGBASEPATH" -name "winecfg.exe" | head -n1 )"
 				writelog "INFO" "${FUNCNAME[0]} - Using Winecfg found at '$OTWINECFGEXE'"
@@ -13645,12 +13795,6 @@ function checkFWS {
 		if [ "$USEFWS" -eq 1 ]; then
 			writelog "INFO" "${FUNCNAME[0]} - 'USEFWS' is enabled - starting '$FWS' exe '$FWSEXE'"
 			setFWSArch
-			IPAK="vcrun2010-x64"
-			if [ "$FWSARCH" == "32" ]; then
-				IPAK="${IPAK//x64/x86}"
-			fi
-			writelog "INFO" "${FUNCNAME[0]} - Installing '$IPAK' into '$GPFX' using '$RUNWINE'"
-			installSteWoShPak "$IPAK" "$GPFX" "$RUNWINE"
 			writelog "INFO" "${FUNCNAME[0]} - Starting '$FWSEXE' forked into the background"
 			restoreOrgVars
 			(sleep 5; "$RUNPROTON" run "$FWSEXE") &
@@ -16981,6 +17125,7 @@ function askVortex {
 # vtxWinecfg and mo2Winecfg are separate functions and separate from oneTimeWinetricks in case they may need some custom logics
 function vtxWinecfg {
 	setVortexVars
+	fallbackIfNoRunProton "$USEVORTEXPROTON"
 	getWinecfgExecutable
 
 	if [ -d "$VORTEXPFX" ]; then
@@ -17007,6 +17152,30 @@ function vtxWinetricks {
 }
 
 #### VORTEX STOP ####
+
+# Takes a custom Proton version name and sets it to RUNPROTON -- Mostly used for mo2winecfg and vtxWinecfg
+function fallbackIfNoRunProton {
+	NEWRUNPROTONNAME="$1"
+	if [ -n "$RUNPROTON" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - RUNPROTON is already defined as '$RUNPROTON' -- Skipping"
+		return
+	fi
+
+	NEWRUNPROTONPATH="$( getProtPathFromCSV "${NEWRUNPROTONNAME}" )"
+	if [ -z "$NEWRUNPROTONPATH" ]; then
+		writelog "ERROR" "${FUNCNAME[0]} - Could not find path to NEWRUNPROTONNAME '${NEWRUNPROTONPATH}' (is it defined in ProtonCSV.txt?) -- Aborting"
+		return
+	fi
+
+	# NEWRUNPROTONPATH points to Proton script file, so use -f
+	if [ ! -f "$NEWRUNPROTONPATH" ]; then
+		writelog "ERROR" "${FUNCNAME[0]} - Found Proton path path '${NEWRUNPROTONPATH}' in ProtonCSV for '${NEWRUNPROTONNAME}', but this path does not exist! Aborting"
+		return
+	fi
+
+	writelog "INFO" "${FUNCNAME[0]} - RUNPROTON is empty and found valid replacement based on '${NEWRUNPROTONPATH}' - Updated RUNPROTON path is '${NEWRUNPROTONPATH}'"
+	RUNPROTON="$NEWRUNPROTONPATH"
+}
 
 function warnInvalidModToolLaunch {
 	MODTOOLNAME="$1"
@@ -17619,7 +17788,19 @@ function setMO2DLMime {
 }
 
 function checkMO2 {
-	if [ "$MO2MODE" != "disabled" ]; then
+	# migrateCfgOption should mean this never happens, but can never be too careful -- Has begun happening since 12/01/2024 for a small number of Steam Deck users
+	if [ "$MO2MODE" == "$NON" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - MO2MODE is '$NON' -- This should not happen but has been observed in the wild, so explicitly returning here"
+		return
+	fi
+
+	if [ "$MO2MODE" == "disabled" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - MO2MODE is 'disabled' -- Skipping checkMO2!"
+		return
+	fi
+
+	# if [ "$MO2MODE" != "disabled" ]; then    # This check is because MO2 was once planned to have a silent mode, but no idea if/when this will be implemented, so just explicitly check for GUI
+	if [ "$MO2MODE" == "gui" ]; then
 		writelog "INFO" "${FUNCNAME[0]} - MO2MODE is '$MO2MODE' - starting MO2"
 
 		if [ "$WAITMO2" -gt 0 ]; then
@@ -17646,8 +17827,8 @@ function checkMO2 {
 					}
 				;;
 				4)  {
-						writelog "INFO" "${FUNCNAME[0]} - Selected to start $MO with mods silently"
-						MO2MODE="silent"
+						writelog "INFO" "${FUNCNAME[0]} - Selected to start $MO with mods silently -- defaulting to gui since silent mode is not implemented"
+						MO2MODE="gui"
 					}
 				;;
 				6)  {
@@ -17669,13 +17850,15 @@ function checkMO2 {
 			writelog "INFO" "${FUNCNAME[0]} - Disabling custom command, because $MO2 is enabled"
 			USECUSTOMCMD=0
 		fi
+	else
+		writelog "WARN" "${FUNCNAME[0]} - Unknown MO2MODE value '$MO2MODE' -- This is safe as checkMO2 has been skipped, but it is still unusual"
 	fi
 }
 
 function mo2Winecfg {
 	setMO2Vars
+	fallbackIfNoRunProton "$USEMO2PROTON"
 	getWinecfgExecutable
-
 	if [ -d "$MO2PFX" ]; then
 		writelog "INFO" "${FUNCNAME[0]} - Running Winecfg for MO2"
 		writelog "INFO" "${FUNCNAME[0]} - WINEDEBUG=\"-all\" WINEPREFIX=\"$MO2PFX\" \"$MO2WINE\" \"$OTWINECFGEXE\""
@@ -22040,13 +22223,14 @@ function howto {
 	echo "    steamdeckcompat <gameid>         Get information about Steam Deck compatibility for <gameid>"
 	echo "                                       Will work offline if the information has been fetched before"
 	echo "                                       (for 'SteamAppID' or 'last')"
-	echo "    steamgriddb|sgdb <args>          Download most relevant artwork from SteamGridDB based on Steam AppID or SteamGridDB Game ID"
+	echo "    steamgriddb|sgdb <appid/args>    Download most relevant artwork from SteamGridDB based on Steam AppID or SteamGridDB Game ID"
 	echo "                                      Attempts to search for and download hero, logo, and boxart from SteamGridDB, and can optionally"
 	echo "                                      apply this artwork to the game in your Steam library, by giving it the AppID of the game to use"
 	echo "                                      in the filename."
 	echo "                                       This setting uses preferences specified on Global Menu under SteamGridDB options, such as"
 	echo "                                       dimensions, and how to manage existing files (though an override can be specified for how"
 	echo "                                       to manage existing artwork files)."
+	echo "     Pass an AppID instead of the below args to open a GUI for selecting game artwork."
 	echo "      <args>:"
 	echo "      --search-id=                     Steam AppID or SteamGridDB Game ID to search for (ex: AppID 22330 or Game ID 5258102)"
 	echo "      --search-name=                   Search SteamGridDB with a name and return the best-match Game ID, and use --nonsteam automatically."
@@ -22665,9 +22849,21 @@ function commandline {
 	elif [ "$1" == "steamgriddb" ] || [ "$1" == "sgdb" ]; then
 		# This is the new SteamGridDB commandline usage, we just expose direct function to commandline
 
-		# TODO if search ID is not provided but the first argument is an integer, assume it is the AppID
-		# Will allow for usage like `steamtinkerlaunch sgdb 730 --apply` which is very clean
-		commandlineGetSteamGridDBArtwork "$@"
+		# No arguments passed, skip
+		if [ -z "$2" ]; then
+			echo "Need to pass arguments to SteamGridDB command, see 'steamtinkerlaunch help' for usage."
+			return
+		fi
+
+		if [ -z "$3" ]; then
+			# TODO ensure this new path does not break 'commandlineGetSteamGridDBArtwork' usage in any way!
+			## Show GUI if only 3rd argument given (assume is AppID), i.e if user just entered "steamtinkerlaunch sgdb <appid>"
+			getSteamGridDBArtworkGUI "$2"
+		else
+			# TODO if search ID is not provided but the first argument is an integer, assume it is the AppID
+			## Will allow for usage like `steamtinkerlaunch sgdb 730 --apply` which is very clean
+			commandlineGetSteamGridDBArtwork "$@"
+		fi
 	elif [ "$1" == "getsteamgriddbid" ] || [ "$1" == "sgdbid" ]; then
 		getSGDBGameIDFromTitle "$2"
 	elif [ "$1" == "update" ]; then
@@ -23285,32 +23481,36 @@ function dlX64Dbg {
 	DLCH="$DLDST/commithash.txt"
 	if [ -f "$DLCH" ]; then
 		writelog "SKIP" "${FUNCNAME[0]} - '$X64D' is already ready"
+		return
+	fi
+
+	mkProjDir "$DLDST"
+	X64ZIP="$(getLatestX64dbgSnap)"
+	X64ZIPBASE="$( basename "$X64ZIP" )"
+
+	# Download x64dbg
+	if [ ! -f "$DLDST/$X64ZIPBASE" ]; then
+		notiShow "$(strFix "$NOTY_DLCUSTOMPROTON" "$X64ZIP")" "S"
+		dlCheck "$X64ZIP"  "$DLDST/$X64ZIPBASE" "X" "Downloading 'x64dbg'"
+		notiShow "$(strFix "$NOTY_DLCUSTOMPROTON2" "$X64ZIP")" "S"
+	fi
+
+	DLDST="$X64DBGDLDIR"
+	if [ ! -s "$DLDST" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - Downloaded file '$DLDST/$X64ZIPBASE' is empty - removing"
+		rm "$DLDST/$X64ZIPBASE" 2>/dev/null
+		return
+	fi
+
+	# Extract x64dbg
+	notiShow "$(strFix "$NOTY_DLCUSTOMPROTON3" "$X64ZIPBASE")" "S"
+	writelog "INFO" "${FUNCNAME[0]} - Download of '$X64ZIPBASE' to '$DLDST' was successful"
+	"$UNZIP" -q "$DLDST/$X64ZIPBASE" -d "$DLDST" 2>/dev/null
+	notiShow "$GUI_DONE" "S"
+	if [ -f "$DLCH" ]; then
+		writelog "INFO" "${FUNCNAME[0]} - Extracted '$X64ZIPBASE' to '$DLDST'"
 	else
-		mkProjDir "$DLDST"
-		X64ZIP="$(getLatestX64dbgSnap)"
-		X64ZIPBASE="$( basename "$X64ZIP" )"
-
-		if [ ! -f "$DLDST/$X64ZIPBASE" ]; then
-			notiShow "$(strFix "$NOTY_DLCUSTOMPROTON" "$X64ZIP")" "S"
-			dlCheck "$X64ZIP"  "$DLDST/$X64ZIPBASE" "X" "Downloading 'x64dbg'"
-			notiShow "$(strFix "$NOTY_DLCUSTOMPROTON2" "$X64ZIP")" "S"
-		fi
-
-		DLDST="$X64DBGDLDIR"
-		if [ ! -s "$DLDST" ]; then
-			writelog "SKIP" "${FUNCNAME[0]} - Downloaded file '$DLDST/$X64ZIPBASE' is empty - removing"
-			rm "$DLDST/$X64ZIPBASE" 2>/dev/null
-		else
-			notiShow "$(strFix "$NOTY_DLCUSTOMPROTON3" "$X64ZIPBASE")" "S"
-			writelog "INFO" "${FUNCNAME[0]} - Download of '$X64ZIPBASE' to '$DLDST' was successful"
-			"$UNZIP" -q "$DLDST/$X64ZIPBASE" -d "$DLDST" 2>/dev/null
-			notiShow "$GUI_DONE" "S"
-			if [ -f "$DLCH" ]; then
-				writelog "INFO" "${FUNCNAME[0]} - Extracted '$X64ZIPBASE' to '$DLDST'"
-			else
-				writelog "SKIP" "${FUNCNAME[0]} - Extracting of file '$DLDST/$X64ZIPBASE' failed"
-			fi
-		fi
+		writelog "SKIP" "${FUNCNAME[0]} - Extracting of file '$DLDST/$X64ZIPBASE' failed"
 	fi
 }
 
@@ -24613,7 +24813,7 @@ function emptyVars {
 
 		FPPATH="/app/utils/bin/"
 		if [ -d "$FPPATH" ]; then
-			PATH="$STLPATH:$FPPATH"
+			PATH="${STLPATH%:}:$FPPATH"
 		else
 			PATH="$STLPATH"
 		fi
@@ -25496,7 +25696,7 @@ function steamdeckBeforeGame {
 			writelog "INFO" "${FUNCNAME[0]} - Final Deck Check: Looks like we're in Game Mode (FIXGAMESCOPE is '$FIXGAMESCOPE')"
 			writelog "INFO" "${FUNCNAME[0]} - Force-enabling DXVK_HDR=1 for Steam Deck Game Mode, allows HDR support for Steam Deck OLED and HDR displays attached to Steam Deck"
 
-			# Override config value without updating the stored value itself, to preserve compatibility with Desktop Mode 
+			# Override config value without updating the stored value itself, to preserve compatibility with Desktop Mode
 			export DXVK_HDR=1
 		else
 			writelog "INFO" "${FUNCNAME[0]} - Final Deck Check: Looks like we're in Desktop Mode (FIXGAMESCOPE is '$FIXGAMESCOPE')"
